@@ -27,8 +27,9 @@ embedded-hal = "0.2.4"
 cortex-m = "0.6.2"
 cortex-m-rt = "0.6.12"
 panic-rtt-core = {version="0.2.1"}
-openmv_h7_bsp = {version="0.1.0", path="../openmv_h7_bsp"}
-
+#openmv_h7_bsp = {version="0.1.0", path="../openmv_h7_bsp"}
+px4flow_bsp = {version="0.1.6", path="../px4flow_bsp"}
+stm32f4xx-hal = {version="0.8.3",  features = ["stm32f407", "rt"] }
 
 [profile.release]
 debug = true

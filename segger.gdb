@@ -17,7 +17,7 @@ monitor speed auto
 #set remote memory-write-packet-size fixed
 
 # *try* to stop at the user entry point (it might be gone due to inlining)
-break main
+# break main
 
 # don't confirm when quitting debugger
 define hook-quit

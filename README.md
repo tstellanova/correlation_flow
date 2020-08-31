@@ -16,3 +16,17 @@ In the future as tools such as probe-rs solidify, we may switch to that toolset.
 ```shell script
 cargo run --release --example openmv_h7
 ```
+
+### PX4FLOW 
+
+```shell script
+cargo run --example px4flow --release
+``` 
+
+## Image Conversion
+
+We used ImageMagick's `convert` command to generate raw 8-bit grayscale 
+images from png files using eg: 
+```shell script
+convert 64sq_253_46.png -depth 8 64sq_253_46.gray
+```

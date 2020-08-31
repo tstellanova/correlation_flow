@@ -11,13 +11,21 @@ use microfft::Complex32;
 pub mod micro_cfft;
 #[cfg(feature = "real_fft")]
 pub mod micro_rfft;
-
+#[cfg(feature = "fwht")]
+pub mod fwht;
 
 /// Convert 8-bit sample data to normalized f32
 fn fill_u8_samples_to_f32(input: &[u8], output: &mut [f32]) {
     let n = input.len();
     for i in 0..n {
         output[i] = (input[i] as f32) / 255.0;
+    }
+}
+
+pub fn fill_u8_samples_to_i16(input: &[u8], output: &mut [i16]) {
+    let n = input.len();
+    for i in 0..n {
+        output[i] = input[i] as i16;
     }
 }
 

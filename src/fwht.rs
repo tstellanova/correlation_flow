@@ -4,31 +4,41 @@ LICENSE: BSD3 (see LICENSE file)
 */
 
 
-//! Implement image phase correlation using
-//! the Fast Walsh-Hadamard Transform
-//! with sign-only correlation
+//! Implements image phase correlation using the Fast Walsh-Hadamard Transform
+//! with sign-only correlation. Could be used to:
+//! - stitch images together (by calculating the point where images overlap)
+//! - measure optical flow (by measuring the 2D translation between images)
 //!
 //! References:
-//! - "DCT SIGN-ONLY CORRELATION WITH APPLICATION TO IMAGE MATCHING
-//! AND THE RELATIONSHIP WITH PHASE-ONLY CORRELATION":
+//! - Izumi ITO and Hitoshi KIYA, "DCT SIGN-ONLY CORRELATION WITH APPLICATION TO IMAGE MATCHING
+//! AND THE RELATIONSHIP WITH PHASE-ONLY CORRELATION" [DOI 10.1109/ICASSP.2007.366138](https://doi.org/10.1109/ICASSP.2007.366138)
 //! Authors: Izumi ITO and Hitoshi KIYA (2007)
-//! - "DCT Sign Only Correlation and Its Application to Image Registration":
-//! Authors: H. Kiya et al (2006)
+//! - Hitoshi KIYA et al, "DCT Sign Only Correlation and Its Application to Image Registration"
+//! [DOI 10.1109/APCCAS.2006.342490](https://doi.org/10.1109/APCCAS.2006.342490)
 //!
+//!
+
 use num_integer::Integer;
-const NSAMPLES: usize = 64*64;
 
+/// Currently the number of allowed samples is statically fixed at NSAMPLES
+pub const NSAMPLES: usize = 64*64;
 
-const BLOCK_DIM: usize = 2;
-const BLOCK_LEN: usize = BLOCK_DIM*BLOCK_DIM;
+/// Length of an edge of the SAD blocks
+const SAD_BLOCK_DIM: usize = 2;
+const BLOCK_LEN: usize = SAD_BLOCK_DIM * SAD_BLOCK_DIM;
+/// Blocks used for comparing Sum of Absolute Differences (SAD)
 type SadBlock = [u8; BLOCK_LEN];
 
 /// Fast Walsh Hadamard transform correlator:
-/// Use FWHT sign-only transformation to measure optical flow
-/// via image displacement between two images.
-/// Static memory used is (3 * 2) = 6 * NSAMPLES bytes
+/// Uses FWHT sign-only transformation to measure displacement vector between two images.
+/// Can be used to measure optical flow by comparing a series of images.
+///
+/// Minimum static memory used is (3 * 2) = 6 * NSAMPLES bytes
 pub struct HadamardCorrelator {
+    /// The number of columns in the image.
+    /// This and NSAMPLES defines the "shape" of the image matrix.
     cols: usize,
+    /// Scratch buffers used for processing
     i16_scratch0: [i16; NSAMPLES],
     i16_scratch1: [i16; NSAMPLES],
     i16_scratch2: [i16; NSAMPLES],
@@ -37,7 +47,7 @@ pub struct HadamardCorrelator {
 impl HadamardCorrelator {
     pub fn new(columns: usize, rows: usize) -> Self {
         let nsamples = columns * rows;
-        assert_eq!(nsamples, NSAMPLES, "nsamples restricted to NSAMPLES");
+        assert_eq!(nsamples, NSAMPLES, "size restricted to NSAMPLES");
 
         Self {
             cols: columns,
@@ -47,22 +57,37 @@ impl HadamardCorrelator {
         }
     }
 
-    /// Fill working buffer from input samples and transform them
-    fn fill_and_transform(input: &[u8], output: &mut [i16] )
+    /// Fill working buffer from input samples,
+    /// then transform, then sign-reduce
+    fn fill_transform_reduce(input: &[u8], output: &mut [i16] )
     {
-        super::fill_u8_samples_to_i16(&input, output);
+        Self::fill_u8_samples_to_i16(&input, output);
         Self::fwht_transform_i16(output);
         Self::sign_reduce(output);
     }
 
-    /// Estimate translational optical flow using DCT sign-only correlation
-    pub fn calculate_flow(
+    /// Copy u8 sample bytes to i16 working buffer
+    fn fill_u8_samples_to_i16(input: &[u8], output: &mut [i16]) {
+        let n = input.len();
+        for i in 0..n {
+            output[i] = input[i] as i16;
+        }
+    }
+
+    /// Measure 2D translation, the movement of image or camera
+    /// between two image frames.  This is the basis of optical flow measurement.
+    /// - Returns (dx, dy)
+    /// - `old_frame` is an image sample frame that was obtained earlier in time
+    /// - `new_frame` is an image sample frame that was obtained later in time
+    pub fn measure_translation(
         &mut self,
         new_frame: &[u8],
         old_frame: &[u8],
     ) -> (i16, i16) {
-        Self::fill_and_transform(&old_frame, &mut self.i16_scratch0);
-        Self::fill_and_transform(&new_frame, &mut self.i16_scratch1);
+        Self::fill_transform_reduce(&old_frame, &mut self.i16_scratch0);
+        Self::fill_transform_reduce(&new_frame, &mut self.i16_scratch1);
+        // scratch0 and scratch1 now contain sets of -1/+1 which are the sign-reduced
+        // form of their FWHT-transformed values
 
         Self::hadamard_product_i16(
             &self.i16_scratch0,
@@ -83,7 +108,7 @@ impl HadamardCorrelator {
         (dx, dy)
     }
 
-    /// Apply Fast Walsh Hadamard Transform in-place to buffer
+    /// Apply Fast Walsh Hadamard Transform (FWHT) in-place to buffer
     fn fwht_transform_i16(buf: &mut [i16]) {
         let mut h = 1;
         while h < buf.len() {
@@ -94,6 +119,8 @@ impl HadamardCorrelator {
                     let x = buf[j];
                     let y = buf[j_leap];
                     //println!("j x,y: {} {},{}", j, x, y);
+                    // we use saturating arithmetic here because, for our application,
+                    // this is sufficient to search for peaks
                     buf[j] = x.saturating_add(y);
                     buf[j_leap] = x.saturating_sub(y);
                 }
@@ -102,76 +129,79 @@ impl HadamardCorrelator {
         }
     }
 
-    /// Reduce input values to just their sign
+    /// Reduce input values to just their sign: +1 or -1
+    /// For our application we disallow zero
     fn sign_reduce(buf: &mut [i16]) {
         for i in 0..buf.len() {
             buf[i] = match buf[i] {
-                n if n > 0 => 1i16,
-                _ => -1i16
+                n if n > 0 => 1,
+                _ => -1
             };
         }
     }
 
     /// The sequence of +/- dx, +/- dy used for direction determination
-    const SIGN_SEQUENCE: [(i16,i16); 4] = [ (-1, -1), (1, -1), (-1, 1), (1, 1)];
+    const QUADRANT_SIGN_SEQUENCE: [(i16, i16); 4] = [ (-1, -1), (1, -1), (-1, 1), (1, 1)];
 
-    /// compare a block centered in the new frame to four blocks at:
-    /// (-dx, -dy), (-dx, +dy), (+dx, -dy), (+dx, +dy)
-    /// determine which has the lowest Sum of Absolute Differences (SAD),
-    /// return the corresponding sign of (dx, dy) to make that true
+    /// - Compare a sample block centered in the new frame to four blocks at:
+    /// (-dx, -dy), (+dx, -dy), (-dx, +dy), (+dx, +dy) -- see `QUADRANT_SIGN_SEQUENCE`
+    /// - Determine which comparison has the lowest Sum of Absolute Differences (SAD),
+    /// - Returns the corresponding sign of (dx, dy)
+    /// - `old_frame` and `new_frame` are a sequence of equal-sized image frames
+    /// - `frame_cols` is the number of columns per row in an image frame
+    /// - (`dx`, `dy`) comprise the previously measured magnitude of the translation between frames
     fn sad_block_search(old_frame: &[u8], new_frame: &[u8], frame_cols: usize, dx: usize, dy: usize)
     -> (i16, i16)
     {
-        const BLOCK_HALF_DIM: usize = BLOCK_DIM /2;
+        assert_eq!(old_frame.len(), new_frame.len(),"old and new frames must be same size");
         let frame_rows = new_frame.len() / frame_cols;
         let ctr_y = (frame_rows / 2) + (frame_rows % 2) ;
         let ctr_x = (frame_cols / 2) + (frame_cols % 2) ;
-        // println!("ctr_x {} ctr_y {} BLOCK_HALF_DIM {}", ctr_x, ctr_y, BLOCK_HALF_DIM);
 
-        assert_eq!(old_frame.len(), new_frame.len(),"old and new frames must be same size");
-        let ctr_x_lo = ctr_x - BLOCK_HALF_DIM;
-        let ctr_y_lo = ctr_y - BLOCK_HALF_DIM;
+        // ctr_x_lo , ctr_y_lo are the upper-left corner of the new frame sample block
+        let ctr_x_lo = ctr_x - SAD_BLOCK_DIM/2;
+        let ctr_y_lo = ctr_y - SAD_BLOCK_DIM/2;
+        // next we calculate the edges of the blocks to compare with (from the old frame)
         let x_lo = ctr_x_lo - dx;
         let x_hi = ctr_x_lo + dx;
         let y_lo = ctr_y_lo - dy;
         let y_hi = ctr_y_lo + dy;
 
-        // println!("lo {},{} hi {},{}", x_lo, y_lo, x_hi, y_hi);
-
         let mut search_block = [0u8; BLOCK_LEN];
-        Self::fill_block_from_frame(&new_frame, &mut search_block, ctr_x_lo, ctr_y_lo, frame_cols, BLOCK_DIM);
+        Self::fill_block_from_frame(&new_frame, &mut search_block, ctr_x_lo, ctr_y_lo, frame_cols, SAD_BLOCK_DIM);
+        // blocks from the old_frame, one in each quadrant
         let mut oldies: [SadBlock; 4] = [[0u8; BLOCK_LEN]; 4];
-        // NOTE ths order needs to match SIGN_SEQUENCE
-        Self::fill_block_from_frame(&old_frame, &mut oldies[0], x_lo, y_lo, frame_cols, BLOCK_DIM);
-        Self::fill_block_from_frame(&old_frame, &mut oldies[1], x_hi, y_lo, frame_cols, BLOCK_DIM);
-        Self::fill_block_from_frame(&old_frame, &mut oldies[2], x_lo, y_hi, frame_cols, BLOCK_DIM);
-        Self::fill_block_from_frame(&old_frame, &mut oldies[3], x_hi, y_hi, frame_cols, BLOCK_DIM);
+        // NOTE ths order needs to match QUADRANT_SIGN_SEQUENCE:
+        Self::fill_block_from_frame(&old_frame, &mut oldies[0], x_lo, y_lo, frame_cols, SAD_BLOCK_DIM);
+        Self::fill_block_from_frame(&old_frame, &mut oldies[1], x_hi, y_lo, frame_cols, SAD_BLOCK_DIM);
+        Self::fill_block_from_frame(&old_frame, &mut oldies[2], x_lo, y_hi, frame_cols, SAD_BLOCK_DIM);
+        Self::fill_block_from_frame(&old_frame, &mut oldies[3], x_hi, y_hi, frame_cols, SAD_BLOCK_DIM);
 
-        // find the lowest SAD
+        // find the lowest Sum of Absolute Differences
         let mut min_sad = u16::MAX;
         let mut min_idx: usize = 0;
-        for i in 0..Self::SIGN_SEQUENCE.len() {
+        for i in 0..Self::QUADRANT_SIGN_SEQUENCE.len() {
             let cur_sad = Self::sum_abs_diffs(&search_block, &oldies[i]);
             if cur_sad < min_sad {
                 min_sad = cur_sad;
                 min_idx = i;
+                // break early if SAD is zero (maximum exact match)
                 if cur_sad == 0 { break; }
             }
         }
 
-        Self::SIGN_SEQUENCE[min_idx]
+        Self::QUADRANT_SIGN_SEQUENCE[min_idx]
     }
 
-    /// Take a block-size bite out of a larger frame
-    /// Currently guaranteed to explode on out-of-bounds
+    /// Take a block-size bite out of a larger image sample frame.
+    /// Currently guaranteed to explode on out-of-bounds:
+    /// relies on frames being much bigger than blocks.
     fn fill_block_from_frame(frame: &[u8],
                              block: &mut [u8],
                              frame_start_x: usize,
                              frame_start_y: usize,
                              frame_cols: usize,
                              block_dim: usize) {
-        // let start_x = start_idx % frame_cols;
-        // let start_y = start_idx / frame_cols;
         for i in 0..block.len() {
             let block_y = i / block_dim;
             let block_x = i % block_dim;
@@ -182,31 +212,30 @@ impl HadamardCorrelator {
         }
     }
 
+    /// Sum of Absolute Differences between two sample blocks
     fn sum_abs_diffs(block0: &[u8], block1: &[u8]) -> u16 {
         let mut sum_diff: u16 = 0;
         for i in 0..block0.len() {
             sum_diff += block0[i].wrapping_sub(block1[i]) as u16;
         }
-        //println!("diff {:?} {:?} -> {}", block0, block1, sum_diff);
         sum_diff
     }
 
-    /// Multiply two arrays element-wise
+    /// Multiply two arrays element-wise ("Hadamard product")
     fn hadamard_product_i16(f0: &[i16], f1: &[i16], result: &mut [i16]) {
-        //TODO could use SIMD here ?
         for i in 0..f0.len() {
-            // NOTE number of zeros seems vanishingly small
             result[i] = f0[i] * f1[i]
         }
     }
 
-
-    /// Find the average peak of top two
+    /// Find the average position of top two values in the given slice.
+    /// - `columns` is the number of columns per row in the input data
+    /// - Returns (dx, dy) of the peak position in the image
     fn find_averaged_peak(
-        result: &[i16],
+        input: &[i16],
         columns: usize,
     ) -> (usize, usize) {
-        let peaks = Self::find_top_two_peaks(&result, columns);
+        let peaks = Self::find_top_two_peaks(&input, columns);
         //println!("peaks: {:?}", peaks);
 
         let mut avg_x = 0;
@@ -309,7 +338,7 @@ mod tests {
             &frame,
             &mut block,
             start_x, start_y,
-            FRAME_COLS, BLOCK_DIM);
+            FRAME_COLS, SAD_BLOCK_DIM);
 
         assert_eq!(block, [31,41,32,42]);
     }

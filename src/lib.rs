@@ -2,42 +2,18 @@
 Copyright (c) 2020 Todd Stellanova
 LICENSE: BSD3 (see LICENSE file)
 */
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
-use microfft::Complex32;
-// use num_complex::{Complex32};
+//! Calculates 2D image translation using image correlation
+//!
+//! Could be used to:
+//! - stitch image panoramas together (by calculating the point where two images overlap)
+//! - measure optical flow (by measuring the 2D translation between image frames)
+//!
+//! Constrained to operate in very low memory complexity on no_std rust
+//! for embedded systems.
+//!
 
-#[cfg(feature = "complex_fft")]
-pub mod micro_cfft;
-#[cfg(feature = "real_fft")]
-pub mod micro_rfft;
+pub mod fwht;
 
 
-/// Convert 8-bit sample data to normalized f32
-fn fill_u8_samples_to_f32(input: &[u8], output: &mut [f32]) {
-    let n = input.len();
-    for i in 0..n {
-        output[i] = (input[i] as f32) / 255.0;
-    }
-}
-
-/// Find the peak real value in an array of Complex32
-/// - returns the (x,y) position of the peak
-fn find_peak_real(
-    input: &[Complex32],
-    cols: usize,
-) -> (usize, usize, f32)
-{
-    let mut peak_val = 0f32;
-    let mut peak_idx: usize = 0;
-    for i in 0..input.len() {
-        if input[i].re > peak_val {
-            peak_idx = i;
-            peak_val = input[i].re;
-        }
-    }
-
-    let x = peak_idx % cols;
-    let y = peak_idx / cols;
-    (x, y, peak_val)
-}

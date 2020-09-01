@@ -7,33 +7,26 @@ license = "BSD-3-Clause"
 repository = "https://github.com/tstellanova/correlation_flow"
 description  = "Optical flow measurement with image phase correlation"
 categories = [
+    "computer-vision",
     "embedded",
     "no-std",
 ]
 keywords = [
     "camera",
     "imaging",
+    "robotics"
 ]
-
 
 [dependencies]
 num-integer = {version = "0.1.43",  default-features=false }
 num-traits = {version="0.2.12" , default-features=false }
-microfft = "0.3.0"
-micromath = "1.0.1"
 
 [dev-dependencies]
 embedded-hal = "0.2.4"
 cortex-m = "0.6.2"
 cortex-m-rt = "0.6.12"
 panic-rtt-core = {version="0.2.1"}
-openmv_h7_bsp = {version="0.1.0", path="../openmv_h7_bsp"}
+px4flow_bsp = {version="0.1.6", path="../px4flow_bsp"}
+stm32f4xx-hal = {version="0.8.3",  features = ["stm32f407", "rt"] }
 
 
-[profile.release]
-debug = true
-
-[features]
-real_fft=[]
-complex_fft=[]
-default=["real_fft"]

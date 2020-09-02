@@ -18,7 +18,6 @@ LICENSE: BSD3 (see LICENSE file)
 //!
 //!
 
-use num_integer::Integer;
 
 /// Currently the number of allowed samples is statically fixed at NSAMPLES
 pub const NSAMPLES: usize = 64*64;
@@ -38,6 +37,11 @@ pub struct HadamardCorrelator {
     /// The number of columns in the image.
     /// This and NSAMPLES defines the "shape" of the image matrix.
     cols: usize,
+    /// the center x (column) of a frame
+    frame_center_x: usize,
+    /// the center y (row) of a frame
+    frame_center_y: usize,
+
     /// Scratch buffers used for processing
     i16_scratch0: [i16; NSAMPLES],
     i16_scratch1: [i16; NSAMPLES],
@@ -48,9 +52,13 @@ impl HadamardCorrelator {
     pub fn new(columns: usize, rows: usize) -> Self {
         let nsamples = columns * rows;
         assert_eq!(nsamples, NSAMPLES, "size restricted to NSAMPLES");
+        let frame_center_x = (columns / 2) + (columns % 2);
+        let frame_center_y = (rows / 2 ) + (rows % 2);
 
         Self {
             cols: columns,
+            frame_center_x,
+            frame_center_y,
             i16_scratch0: [0i16; NSAMPLES],
             i16_scratch1: [0i16; NSAMPLES],
             i16_scratch2: [0i16; NSAMPLES],
@@ -68,7 +76,7 @@ impl HadamardCorrelator {
 
     /// Copy u8 sample bytes to i16 working buffer
     fn fill_u8_samples_to_i16(input: &[u8], output: &mut [i16]) {
-        let n = input.len();
+        let n = input.len().min(output.len());
         for i in 0..n {
             output[i] = input[i] as i16;
         }
@@ -84,6 +92,16 @@ impl HadamardCorrelator {
         new_frame: &[u8],
         old_frame: &[u8],
     ) -> (i16, i16) {
+        // fast SAD filter to eliminate low-change frames
+        let mut subframe1 = [0u8; 16];
+        let mut subframe0 = [0u8; 16];
+        Self::fill_block_from_frame(&old_frame, &mut subframe0, self.frame_center_x - 2 , self.frame_center_y - 2,self.cols, 4);
+        Self::fill_block_from_frame(&new_frame, &mut subframe1, self.frame_center_x - 2 , self.frame_center_y - 2,self.cols, 4);
+        let quick_sad = Self::sum_abs_diffs(&subframe0, &subframe1);
+        if quick_sad < 32 { //TODO make threshold configurable?
+            return (0,0)
+        }
+
         Self::fill_transform_reduce(&old_frame, &mut self.i16_scratch0);
         Self::fill_transform_reduce(&new_frame, &mut self.i16_scratch1);
         // scratch0 and scratch1 now contain sets of -1/+1 which are the sign-reduced
@@ -101,11 +119,17 @@ impl HadamardCorrelator {
 
         // find the magnitude of dx, dy
         let (max_x, max_y) = Self::find_averaged_peak(&self.i16_scratch2, self.cols);
+        if max_x > self.cols / 2 || max_y > (new_frame.len() / self.cols) / 2 {
+            // bogus motion
+            // TODO use peak value threshold instead?
+            return (0, 0)
+        }
         // we now know the magnitude of the movement vector but not the direction
         let (sdx, sdy) = Self::sad_block_search(&old_frame, &new_frame,self.cols, max_x, max_y);
         let dx = sdx * (max_x as i16);
         let dy = sdy * (max_y as i16);
         (dx, dy)
+        // (max_x as i16, max_y as i16)
     }
 
     /// Apply Fast Walsh Hadamard Transform (FWHT) in-place to buffer
@@ -153,19 +177,20 @@ impl HadamardCorrelator {
     fn sad_block_search(old_frame: &[u8], new_frame: &[u8], frame_cols: usize, dx: usize, dy: usize)
     -> (i16, i16)
     {
+        const SAD_BLOCK_HALF_DIM:usize = SAD_BLOCK_DIM/2;
         assert_eq!(old_frame.len(), new_frame.len(),"old and new frames must be same size");
         let frame_rows = new_frame.len() / frame_cols;
         let ctr_y = (frame_rows / 2) + (frame_rows % 2) ;
         let ctr_x = (frame_cols / 2) + (frame_cols % 2) ;
 
         // ctr_x_lo , ctr_y_lo are the upper-left corner of the new frame sample block
-        let ctr_x_lo = ctr_x - SAD_BLOCK_DIM/2;
-        let ctr_y_lo = ctr_y - SAD_BLOCK_DIM/2;
+        let ctr_x_lo = ctr_x - SAD_BLOCK_HALF_DIM;
+        let ctr_y_lo = ctr_y - SAD_BLOCK_HALF_DIM;
         // next we calculate the edges of the blocks to compare with (from the old frame)
-        let x_lo = ctr_x_lo - dx;
-        let x_hi = ctr_x_lo + dx;
-        let y_lo = ctr_y_lo - dy;
-        let y_hi = ctr_y_lo + dy;
+        let x_lo = ctr_x_lo.saturating_sub(dx);
+        let x_hi = (ctr_x_lo + dx).min(frame_cols-SAD_BLOCK_HALF_DIM);
+        let y_lo = ctr_y_lo.saturating_sub(dy);
+        let y_hi = (ctr_y_lo + dy).min(frame_rows-SAD_BLOCK_HALF_DIM);
 
         let mut search_block = [0u8; BLOCK_LEN];
         Self::fill_block_from_frame(&new_frame, &mut search_block, ctr_x_lo, ctr_y_lo, frame_cols, SAD_BLOCK_DIM);
@@ -202,12 +227,13 @@ impl HadamardCorrelator {
                              frame_start_y: usize,
                              frame_cols: usize,
                              block_dim: usize) {
+        let max_frame_idx = frame.len() -1 ;
         for i in 0..block.len() {
             let block_y = i / block_dim;
             let block_x = i % block_dim;
             let frame_x = frame_start_x + block_x;
             let frame_y = frame_start_y + block_y;
-            let frame_idx = frame_y * frame_cols + frame_x;
+            let frame_idx = (frame_y * frame_cols + frame_x).min(max_frame_idx);
             block[i] = frame[frame_idx];
         }
     }
@@ -216,7 +242,11 @@ impl HadamardCorrelator {
     fn sum_abs_diffs(block0: &[u8], block1: &[u8]) -> u16 {
         let mut sum_diff: u16 = 0;
         for i in 0..block0.len() {
-            sum_diff += block0[i].wrapping_sub(block1[i]) as u16;
+            let val_b = block1[i];
+            let val_a = block0[i];
+            sum_diff +=
+                (if val_a  > val_b { val_a - val_b }
+                else  { val_b - val_a } ) as u16;
         }
         sum_diff
     }
@@ -245,8 +275,8 @@ impl HadamardCorrelator {
             avg_x += peak.0;
             avg_y += peak.1;
         }
-        avg_x = avg_x.div_ceil(&2);
-        avg_y = avg_y.div_ceil(&2);
+        avg_x = avg_x / 2;
+        avg_y = avg_y / 2;
         (avg_x, avg_y)
     }
 

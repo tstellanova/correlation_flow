@@ -330,7 +330,7 @@ impl HadamardCorrelator {
                 }
             }
         }
-        
+
         Self::QUADRANT_SIGN_SEQUENCE[min_idx]
     }
 
@@ -364,6 +364,7 @@ impl HadamardCorrelator {
         for i in 0..block0.len() {
             let val_b = block1[i];
             let val_a = block0[i];
+            //TODO someday use eg core::arch::arm::vsubq_u32()
             sum_diff += (if val_a > val_b {
                 val_a - val_b
             } else {

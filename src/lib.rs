@@ -8,10 +8,10 @@ LICENSE: BSD3 (see LICENSE file)
 //!
 //! Could be used for:
 //! - stitching image panoramas together (by calculating the point where two images overlap)
-//! - image registraion
+//! - image registration
 //! - measuring optical flow (by measuring the 2D translation between image frames)
 //!
-//! Constrained to operate in very low memory complexity on no_std rust
+//! This library to operate in very low memory complexity on no_std rust
 //! for embedded systems.
 //!
 

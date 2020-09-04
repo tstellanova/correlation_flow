@@ -6,14 +6,13 @@ LICENSE: BSD3 (see LICENSE file)
 
 //! Calculates 2D image translation using image correlation
 //!
-//! Could be used to:
-//! - stitch image panoramas together (by calculating the point where two images overlap)
-//! - measure optical flow (by measuring the 2D translation between image frames)
+//! Could be used for:
+//! - stitching image panoramas together (by calculating the point where two images overlap)
+//! - image registraion
+//! - measuring optical flow (by measuring the 2D translation between image frames)
 //!
 //! Constrained to operate in very low memory complexity on no_std rust
 //! for embedded systems.
 //!
 
 pub mod fwht;
-
-

@@ -6,10 +6,8 @@ LICENSE: BSD3 (see LICENSE file)
 #![no_main]
 #![no_std]
 
-
 use cortex_m_rt as rt;
 use rt::entry;
-
 
 use panic_rtt_core::{self, rprintln, rtt_init_print};
 
@@ -17,7 +15,6 @@ use correlation_flow::fwht;
 
 static IMAGE0: &'static [u8] = include_bytes!("../testdata/64sq_253_46.gray");
 static IMAGE1: &'static [u8] = include_bytes!("../testdata/64sq_250_30.gray");
-
 
 #[entry]
 fn main() -> ! {
@@ -47,8 +44,5 @@ fn main() -> ! {
 
     rprintln!("<--- DONE --");
 
-    loop {
-
-    }
-
+    loop {}
 }

@@ -3,7 +3,6 @@ Copyright (c) 2020 Todd Stellanova
 LICENSE: BSD3 (see LICENSE file)
 */
 
-
 //! Implements image phase correlation using the Fast Walsh-Hadamard Transform
 //! with sign-only correlation. Could be used to:
 //! - stitch images together (by calculating the point where images overlap)
@@ -18,15 +17,12 @@ LICENSE: BSD3 (see LICENSE file)
 //!
 //!
 
-
 /// Currently the number of allowed samples is statically fixed at NSAMPLES
-pub const NSAMPLES: usize = 64*64;
+pub const NSAMPLES: usize = 64 * 64;
 
 /// Length of an edge of the SAD blocks
 const SAD_BLOCK_DIM: usize = 2;
-const BLOCK_LEN: usize = SAD_BLOCK_DIM * SAD_BLOCK_DIM;
-/// Blocks used for comparing Sum of Absolute Differences (SAD)
-type SadBlock = [u8; BLOCK_LEN];
+const SAD_BLOCK_LEN: usize = SAD_BLOCK_DIM * SAD_BLOCK_DIM;
 
 /// Fast Walsh Hadamard transform correlator:
 /// Uses FWHT sign-only transformation to measure displacement vector between two images.
@@ -53,7 +49,7 @@ impl HadamardCorrelator {
         let nsamples = columns * rows;
         assert_eq!(nsamples, NSAMPLES, "size restricted to NSAMPLES");
         let frame_center_x = (columns / 2) + (columns % 2);
-        let frame_center_y = (rows / 2 ) + (rows % 2);
+        let frame_center_y = (rows / 2) + (rows % 2);
 
         Self {
             cols: columns,
@@ -67,8 +63,7 @@ impl HadamardCorrelator {
 
     /// Fill working buffer from input samples,
     /// then transform, then sign-reduce
-    fn fill_transform_reduce(input: &[u8], output: &mut [i16] )
-    {
+    fn fill_transform_reduce(input: &[u8], output: &mut [i16]) {
         Self::fill_u8_samples_to_i16(&input, output);
         Self::fwht_transform_i16(output);
         Self::sign_reduce(output);
@@ -82,6 +77,38 @@ impl HadamardCorrelator {
         }
     }
 
+    /// Fast filter to eliminate low-change frames
+    fn center_block_change_check(
+        &mut self,
+        new_frame: &[u8],
+        old_frame: &[u8],
+        sad_threshold: u16,
+    ) -> bool {
+        let mut subframe1 = [0u8; 16];
+        let mut subframe0 = [0u8; 16];
+        Self::fill_block_from_frame(
+            &old_frame,
+            &mut subframe0,
+            self.frame_center_x - 2,
+            self.frame_center_y - 2,
+            self.cols,
+            4,
+        );
+        Self::fill_block_from_frame(
+            &new_frame,
+            &mut subframe1,
+            self.frame_center_x - 2,
+            self.frame_center_y - 2,
+            self.cols,
+            4,
+        );
+        let quick_sad = Self::sum_abs_diffs(&subframe0, &subframe1);
+        if quick_sad < sad_threshold {
+            return false;
+        }
+        true
+    }
+
     /// Measure 2D translation, the movement of image or camera
     /// between two image frames.  This is the basis of optical flow measurement.
     /// - Returns (dx, dy)
@@ -92,14 +119,8 @@ impl HadamardCorrelator {
         new_frame: &[u8],
         old_frame: &[u8],
     ) -> (i16, i16) {
-        // fast SAD filter to eliminate low-change frames
-        let mut subframe1 = [0u8; 16];
-        let mut subframe0 = [0u8; 16];
-        Self::fill_block_from_frame(&old_frame, &mut subframe0, self.frame_center_x - 2 , self.frame_center_y - 2,self.cols, 4);
-        Self::fill_block_from_frame(&new_frame, &mut subframe1, self.frame_center_x - 2 , self.frame_center_y - 2,self.cols, 4);
-        let quick_sad = Self::sum_abs_diffs(&subframe0, &subframe1);
-        if quick_sad < 32 { //TODO make threshold configurable?
-            return (0,0)
+        if !self.center_block_change_check(new_frame, old_frame, 32) {
+            return (0, 0);
         }
 
         Self::fill_transform_reduce(&old_frame, &mut self.i16_scratch0);
@@ -118,18 +139,19 @@ impl HadamardCorrelator {
         Self::fwht_transform_i16(&mut self.i16_scratch2);
 
         // find the magnitude of dx, dy
-        let (max_x, max_y) = Self::find_averaged_peak(&self.i16_scratch2, self.cols);
+        let (max_x, max_y) =
+            Self::find_averaged_peak(&self.i16_scratch2, self.cols);
         if max_x > self.cols / 2 || max_y > (new_frame.len() / self.cols) / 2 {
             // bogus motion
-            // TODO use peak value threshold instead?
-            return (0, 0)
+            return (0, 0);
         }
         // we now know the magnitude of the movement vector but not the direction
-        let (sdx, sdy) = Self::sad_block_search(&old_frame, &new_frame,self.cols, max_x, max_y);
+        let (sdx, sdy) = Self::sad_block_search(
+            &old_frame, &new_frame, self.cols, max_x, max_y,
+        );
         let dx = sdx * (max_x as i16);
         let dy = sdy * (max_y as i16);
         (dx, dy)
-        // (max_x as i16, max_y as i16)
     }
 
     /// Apply Fast Walsh Hadamard Transform (FWHT) in-place to buffer
@@ -138,8 +160,8 @@ impl HadamardCorrelator {
         while h < buf.len() {
             let h_leap = h << 1;
             for i in (0..buf.len()).step_by(h_leap) {
-                for j in i..i+h {
-                    let j_leap = j+h;
+                for j in i..i + h {
+                    let j_leap = j + h;
                     let x = buf[j];
                     let y = buf[j_leap];
                     //println!("j x,y: {} {},{}", j, x, y);
@@ -159,13 +181,34 @@ impl HadamardCorrelator {
         for i in 0..buf.len() {
             buf[i] = match buf[i] {
                 n if n > 0 => 1,
-                _ => -1
+                _ => -1,
             };
         }
     }
 
+    /// Find the SAD between the search block and a block from the old_frame
+    fn calc_sad_at_offset(
+        old_frame: &[u8],
+        search_block: &[u8],
+        col: usize,
+        row: usize,
+        frame_cols: usize,
+    ) -> u16 {
+        let mut test_block = [0u8; SAD_BLOCK_LEN];
+        Self::fill_block_from_frame(
+            &old_frame,
+            &mut test_block,
+            col,
+            row,
+            frame_cols,
+            SAD_BLOCK_DIM,
+        );
+        Self::sum_abs_diffs(&search_block, &test_block)
+    }
+
     /// The sequence of +/- dx, +/- dy used for direction determination
-    const QUADRANT_SIGN_SEQUENCE: [(i16, i16); 4] = [ (-1, -1), (1, -1), (-1, 1), (1, 1)];
+    const QUADRANT_SIGN_SEQUENCE: [(i16, i16); 4] =
+        [(-1, -1), (1, -1), (-1, 1), (1, 1)];
 
     /// - Compare a sample block centered in the new frame to four blocks at:
     /// (-dx, -dy), (+dx, -dy), (-dx, +dy), (+dx, +dy) -- see `QUADRANT_SIGN_SEQUENCE`
@@ -174,67 +217,144 @@ impl HadamardCorrelator {
     /// - `old_frame` and `new_frame` are a sequence of equal-sized image frames
     /// - `frame_cols` is the number of columns per row in an image frame
     /// - (`dx`, `dy`) comprise the previously measured magnitude of the translation between frames
-    fn sad_block_search(old_frame: &[u8], new_frame: &[u8], frame_cols: usize, dx: usize, dy: usize)
-    -> (i16, i16)
-    {
-        const SAD_BLOCK_HALF_DIM:usize = SAD_BLOCK_DIM/2;
-        assert_eq!(old_frame.len(), new_frame.len(),"old and new frames must be same size");
+    fn sad_block_search(
+        old_frame: &[u8],
+        new_frame: &[u8],
+        frame_cols: usize,
+        dx: usize,
+        dy: usize,
+    ) -> (i16, i16) {
+        const SAD_BLOCK_HALF_DIM: usize = SAD_BLOCK_DIM / 2;
+        assert_eq!(
+            old_frame.len(),
+            new_frame.len(),
+            "old and new frames must be same size"
+        );
         let frame_rows = new_frame.len() / frame_cols;
-        let ctr_y = (frame_rows / 2) + (frame_rows % 2) ;
-        let ctr_x = (frame_cols / 2) + (frame_cols % 2) ;
+        let max_col = frame_cols - SAD_BLOCK_HALF_DIM;
+        let max_row = frame_rows - SAD_BLOCK_HALF_DIM;
+        let ctr_y = (frame_rows / 2) + (frame_rows % 2);
+        let ctr_x = (frame_cols / 2) + (frame_cols % 2);
 
         // ctr_x_lo , ctr_y_lo are the upper-left corner of the new frame sample block
         let ctr_x_lo = ctr_x - SAD_BLOCK_HALF_DIM;
         let ctr_y_lo = ctr_y - SAD_BLOCK_HALF_DIM;
         // next we calculate the edges of the blocks to compare with (from the old frame)
-        let x_lo = ctr_x_lo.saturating_sub(dx);
-        let x_hi = (ctr_x_lo + dx).min(frame_cols-SAD_BLOCK_HALF_DIM);
-        let y_lo = ctr_y_lo.saturating_sub(dy);
-        let y_hi = (ctr_y_lo + dy).min(frame_rows-SAD_BLOCK_HALF_DIM);
+        let x_lo = ctr_x_lo.wrapping_sub(dx); // we use wrap to detect out-of-bounds
+        let x_hi = ctr_x_lo + dx; // we use > max_col to detect out-of-bounds
+        let y_lo = ctr_y_lo.wrapping_sub(dy); // we use wrap to detect out-of-bounds
+        let y_hi = ctr_y_lo + dy; // we use  > max_row to detect out-of-bounds
 
-        let mut search_block = [0u8; BLOCK_LEN];
-        Self::fill_block_from_frame(&new_frame, &mut search_block, ctr_x_lo, ctr_y_lo, frame_cols, SAD_BLOCK_DIM);
-        // blocks from the old_frame, one in each quadrant
-        let mut oldies: [SadBlock; 4] = [[0u8; BLOCK_LEN]; 4];
-        // NOTE ths order needs to match QUADRANT_SIGN_SEQUENCE:
-        Self::fill_block_from_frame(&old_frame, &mut oldies[0], x_lo, y_lo, frame_cols, SAD_BLOCK_DIM);
-        Self::fill_block_from_frame(&old_frame, &mut oldies[1], x_hi, y_lo, frame_cols, SAD_BLOCK_DIM);
-        Self::fill_block_from_frame(&old_frame, &mut oldies[2], x_lo, y_hi, frame_cols, SAD_BLOCK_DIM);
-        Self::fill_block_from_frame(&old_frame, &mut oldies[3], x_hi, y_hi, frame_cols, SAD_BLOCK_DIM);
+        let mut search_block = [0u8; SAD_BLOCK_LEN];
+        Self::fill_block_from_frame(
+            &new_frame,
+            &mut search_block,
+            ctr_x_lo,
+            ctr_y_lo,
+            frame_cols,
+            SAD_BLOCK_DIM,
+        );
 
-        // find the lowest Sum of Absolute Differences
+        // find the lowest Sum of Absolute Differences between search block and surrounding blocks
         let mut min_sad = u16::MAX;
         let mut min_idx: usize = 0;
-        for i in 0..Self::QUADRANT_SIGN_SEQUENCE.len() {
-            let cur_sad = Self::sum_abs_diffs(&search_block, &oldies[i]);
+        // NOTE ths order needs to match QUADRANT_SIGN_SEQUENCE:
+        if x_lo < ctr_x_lo && y_lo < ctr_y_lo {
+            let cur_sad = Self::calc_sad_at_offset(
+                &old_frame,
+                &search_block,
+                x_lo,
+                y_lo,
+                frame_cols,
+            );
             if cur_sad < min_sad {
                 min_sad = cur_sad;
-                min_idx = i;
+                min_idx = 0;
                 // break early if SAD is zero (maximum exact match)
-                if cur_sad == 0 { break; }
+                if cur_sad == 0 {
+                    return Self::QUADRANT_SIGN_SEQUENCE[min_idx];
+                }
             }
         }
 
+        if x_hi < max_col && y_lo < ctr_y_lo {
+            let cur_sad = Self::calc_sad_at_offset(
+                &old_frame,
+                &search_block,
+                x_hi,
+                y_lo,
+                frame_cols,
+            );
+            if cur_sad < min_sad {
+                min_sad = cur_sad;
+                min_idx = 1;
+                // break early if SAD is zero (maximum exact match)
+                if cur_sad == 0 {
+                    return Self::QUADRANT_SIGN_SEQUENCE[min_idx];
+                }
+            }
+        }
+
+        if x_lo < ctr_x_lo && y_hi < max_row {
+            let cur_sad = Self::calc_sad_at_offset(
+                &old_frame,
+                &search_block,
+                x_lo,
+                y_hi,
+                frame_cols,
+            );
+            if cur_sad < min_sad {
+                min_sad = cur_sad;
+                min_idx = 2;
+                // break early if SAD is zero (maximum exact match)
+                if cur_sad == 0 {
+                    return Self::QUADRANT_SIGN_SEQUENCE[min_idx];
+                }
+            }
+        }
+
+        if x_hi < max_col && y_hi < max_row {
+            let cur_sad = Self::calc_sad_at_offset(
+                &old_frame,
+                &search_block,
+                x_hi,
+                y_hi,
+                frame_cols,
+            );
+            if cur_sad < min_sad {
+                // min_sad = cur_sad;
+                min_idx = 3;
+                // break early if SAD is zero (maximum exact match)
+                if cur_sad == 0 {
+                    return Self::QUADRANT_SIGN_SEQUENCE[min_idx];
+                }
+            }
+        }
+        
         Self::QUADRANT_SIGN_SEQUENCE[min_idx]
     }
 
     /// Take a block-size bite out of a larger image sample frame.
     /// Currently guaranteed to explode on out-of-bounds:
     /// relies on frames being much bigger than blocks.
-    fn fill_block_from_frame(frame: &[u8],
-                             block: &mut [u8],
-                             frame_start_x: usize,
-                             frame_start_y: usize,
-                             frame_cols: usize,
-                             block_dim: usize) {
-        let max_frame_idx = frame.len() -1 ;
-        for i in 0..block.len() {
-            let block_y = i / block_dim;
-            let block_x = i % block_dim;
-            let frame_x = frame_start_x + block_x;
-            let frame_y = frame_start_y + block_y;
-            let frame_idx = (frame_y * frame_cols + frame_x).min(max_frame_idx);
-            block[i] = frame[frame_idx];
+    pub fn fill_block_from_frame(
+        frame: &[u8],
+        block: &mut [u8],
+        frame_start_x: usize,
+        frame_start_y: usize,
+        frame_cols: usize,
+        block_dim: usize,
+    ) {
+        let frame_len = frame.len();
+        //memcpy one row at a time
+        for block_row in 0..block_dim {
+            let block_idx = block_row * block_dim;
+            let frame_y = frame_start_y + block_row;
+            let frame_idx = frame_y * frame_cols + frame_start_x;
+            if (frame_idx + block_dim) < frame_len {
+                block[block_idx..block_idx + block_dim]
+                    .copy_from_slice(&frame[frame_idx..frame_idx + block_dim]);
+            }
         }
     }
 
@@ -244,9 +364,11 @@ impl HadamardCorrelator {
         for i in 0..block0.len() {
             let val_b = block1[i];
             let val_a = block0[i];
-            sum_diff +=
-                (if val_a  > val_b { val_a - val_b }
-                else  { val_b - val_a } ) as u16;
+            sum_diff += (if val_a > val_b {
+                val_a - val_b
+            } else {
+                val_b - val_a
+            }) as u16;
         }
         sum_diff
     }
@@ -261,10 +383,7 @@ impl HadamardCorrelator {
     /// Find the average position of top two values in the given slice.
     /// - `columns` is the number of columns per row in the input data
     /// - Returns (dx, dy) of the peak position in the image
-    fn find_averaged_peak(
-        input: &[i16],
-        columns: usize,
-    ) -> (usize, usize) {
+    fn find_averaged_peak(input: &[i16], columns: usize) -> (usize, usize) {
         let peaks = Self::find_top_two_peaks(&input, columns);
         //println!("peaks: {:?}", peaks);
 
@@ -310,21 +429,23 @@ impl HadamardCorrelator {
     }
 }
 
-
-
+// Note these tests only run on non-embedded by commenting out dev-dependencies in Cargo.toml
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const FRAME_25_DIM: usize = 5;
+    #[rustfmt::skip]
     const FRAME_25: [u8; FRAME_25_DIM * FRAME_25_DIM] = [
         10, 20, 30, 40, 50,
         11, 21, 31, 41, 51,
         12, 22, 32, 42, 52,
         13, 23, 33, 43, 53,
-        14, 24, 34, 44, 54 ];
+        14, 24, 34, 44, 54,
+    ];
 
     const FRAME_64_DIM: usize = 8;
+    #[rustfmt::skip]
     const FRAME_64: [u8; FRAME_64_DIM * FRAME_64_DIM] = [
         10, 20, 30, 40, 50, 60, 70, 80,
         11, 21, 31, 41, 51, 61, 71, 81,
@@ -333,8 +454,9 @@ mod tests {
         14, 24, 34, 44, 54, 64, 74, 84,
         15, 25, 35, 45, 55, 65, 75, 85,
         16, 26, 36, 46, 56, 66, 76, 86,
-        17, 27, 37, 47, 57, 67, 77, 87 ];
-
+        17, 27, 37, 47, 57, 67, 77, 87,
+    ];
+    #[rustfmt::skip]
     const FRAME_64_SHIFT_P1P1: [u8; FRAME_64_DIM * FRAME_64_DIM] = [
         21, 31, 41, 51, 61, 71, 81, 91,
         22, 32, 42, 52, 62, 72, 82, 92,
@@ -343,9 +465,9 @@ mod tests {
         25, 35, 45, 55, 65, 75, 85, 95,
         26, 36, 46, 56, 66, 76, 86, 96,
         27, 37, 47, 57, 67, 77, 87, 97,
-        28, 38, 48, 58, 68, 78, 88, 98 ];
-
-
+        28, 38, 48, 58, 68, 78, 88, 98,
+    ];
+    #[rustfmt::skip]
     const FRAME_64_SHIFT_N1_P1: [u8; FRAME_64_DIM * FRAME_64_DIM] = [
         1, 11, 21, 31, 41, 51, 61, 71,
         2, 12, 22, 32, 42, 52, 62, 72,
@@ -354,12 +476,12 @@ mod tests {
         5, 15, 25, 35, 45, 55, 65, 75,
         6, 16, 26, 36, 46, 56, 66, 76,
         7, 17, 27, 37, 47, 57, 67, 77,
-        8, 18, 28, 38, 48, 58, 68, 78 ];
-
+        8, 18, 28, 38, 48, 58, 68, 78,
+    ];
 
     #[test]
     fn block_loading() {
-        let mut block = [0u8; BLOCK_LEN];
+        let mut block = [0u8; SAD_BLOCK_LEN];
         let frame = FRAME_25;
         const FRAME_COLS: usize = FRAME_25_DIM;
         let start_x: usize = 2;
@@ -367,28 +489,36 @@ mod tests {
         HadamardCorrelator::fill_block_from_frame(
             &frame,
             &mut block,
-            start_x, start_y,
-            FRAME_COLS, SAD_BLOCK_DIM);
+            start_x,
+            start_y,
+            FRAME_COLS,
+            SAD_BLOCK_DIM,
+        );
 
-        assert_eq!(block, [31,41,32,42]);
+        assert_eq!(block, [31, 41, 32, 42]);
     }
-
 
     #[test]
     fn sad_search() {
-        let (sdx, sdy) =
-            HadamardCorrelator::sad_block_search(
-            &FRAME_64, &FRAME_64_SHIFT_P1P1, FRAME_64_DIM,1, 1);
+        let (sdx, sdy) = HadamardCorrelator::sad_block_search(
+            &FRAME_64,
+            &FRAME_64_SHIFT_P1P1,
+            FRAME_64_DIM,
+            1,
+            1,
+        );
 
         assert_eq!(sdx, 1i16, "sign dx should be P1");
         assert_eq!(sdy, 1i16, "sign dy should be P1");
 
-
-        let (sdx, sdy) =
-            HadamardCorrelator::sad_block_search(
-                &FRAME_64, &FRAME_64_SHIFT_N1_P1, FRAME_64_DIM,1, 1);
+        let (sdx, sdy) = HadamardCorrelator::sad_block_search(
+            &FRAME_64,
+            &FRAME_64_SHIFT_N1_P1,
+            FRAME_64_DIM,
+            1,
+            1,
+        );
         assert_eq!(sdx, -1i16, "sign dx should be N1");
         assert_eq!(sdy, 1i16, "sign dy should be P1");
     }
-
 }

@@ -5,7 +5,7 @@ Optical flow calculation using image correlation for no_std rust.
 ## Embedded Examples
 
 The examples are currently designed to be used with J-Link / RTT.
-In the future as tools such as probe-rs solidify, we may switch to that toolset.
+In the future as tools such as probe-rs solidify, we may switch to a different default toolset.
 
 - In one shell run: `./start_gdb_server_jlink.sh`
 - In another shell run: `JLinkRTTClient`
@@ -33,4 +33,4 @@ convert 64sq_253_46.png -depth 8 64sq_253_46.gray
 
 - [x] Detects discrete 2D image translation within a static 64x64 grid (maximum +/- 32 pixel movement)
 - [x] Example that runs on embedded hardware (PX4FLOW)
-- [ ] Simple test runs (currently tested under std using [glovent](https://github.com/tstellanova/glovent))
+- [ ] Simple test runs (currently requires commenting out dev-dependencies to run on std platform)

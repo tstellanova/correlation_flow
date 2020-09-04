@@ -1,6 +1,6 @@
 [package]
 name = "correlation_flow"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Todd Stellanova <tstellanova@users.noreply.github.com>"]
 edition = "2018"
 license = "BSD-3-Clause"
@@ -20,9 +20,10 @@ keywords = [
 [dependencies]
 num-traits = {version="0.2.12" , default-features=false }
 
+#[target.'cfg(fubarn)'.dev-dependencies]
 [dev-dependencies]
 embedded-hal = "0.2.4"
-cortex-m = "0.6.2"
+cortex-m = "0.6.3"
 cortex-m-rt = "0.6.12"
 panic-rtt-core = {version="0.2.1"}
 px4flow_bsp = {version="0.1.6", path="../px4flow_bsp"}

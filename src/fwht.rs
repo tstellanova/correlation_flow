@@ -24,6 +24,13 @@ pub const NSAMPLES: usize = 64 * 64;
 const SAD_BLOCK_DIM: usize = 2;
 const SAD_BLOCK_LEN: usize = SAD_BLOCK_DIM * SAD_BLOCK_DIM;
 
+
+// use generic_array::typenum::U5;
+// use generic_array::{ArrayLength, GenericArray};
+
+/// Buffer size for processing a full frame
+type FwhtFrameBufI16 = [i16; NSAMPLES];
+
 /// Fast Walsh Hadamard transform correlator:
 /// Uses FWHT sign-only transformation to measure displacement vector between two images.
 /// Can be used to measure optical flow by comparing a series of images.
@@ -33,15 +40,16 @@ pub struct HadamardCorrelator {
     /// The number of columns in the image.
     /// This and NSAMPLES defines the "shape" of the image matrix.
     cols: usize,
+    rows: usize,
     /// the center x (column) of a frame
     frame_center_x: usize,
     /// the center y (row) of a frame
     frame_center_y: usize,
 
     /// Scratch buffers used for processing
-    i16_scratch0: [i16; NSAMPLES],
-    i16_scratch1: [i16; NSAMPLES],
-    i16_scratch2: [i16; NSAMPLES],
+    i16_scratch0: FwhtFrameBufI16,
+    i16_scratch1: FwhtFrameBufI16,
+    i16_scratch2: FwhtFrameBufI16,
 }
 
 impl HadamardCorrelator {
@@ -53,6 +61,7 @@ impl HadamardCorrelator {
 
         Self {
             cols: columns,
+            rows,
             frame_center_x,
             frame_center_y,
             i16_scratch0: [0i16; NSAMPLES],
@@ -79,7 +88,7 @@ impl HadamardCorrelator {
 
     /// Fast filter to eliminate low-change frames
     fn center_block_change_check(
-        &mut self,
+        &self,
         new_frame: &[u8],
         old_frame: &[u8],
         sad_threshold: u16,
@@ -103,7 +112,7 @@ impl HadamardCorrelator {
             4,
         );
         let quick_sad = Self::sum_abs_diffs(&subframe0, &subframe1);
-        if quick_sad < sad_threshold {
+        if quick_sad < (sad_threshold * (subframe0.len() as u16)) {
             return false;
         }
         true
@@ -119,7 +128,9 @@ impl HadamardCorrelator {
         new_frame: &[u8],
         old_frame: &[u8],
     ) -> (i16, i16) {
-        if !self.center_block_change_check(new_frame, old_frame, 32) {
+        let max_col_idx = self.frame_center_x;
+        let max_row_idx = self.frame_center_y;
+        if !self.center_block_change_check(new_frame, old_frame, 2) {
             return (0, 0);
         }
 
@@ -141,7 +152,7 @@ impl HadamardCorrelator {
         // find the magnitude of dx, dy
         let (max_x, max_y) =
             Self::find_averaged_peak(&self.i16_scratch2, self.cols);
-        if max_x > self.cols / 2 || max_y > (new_frame.len() / self.cols) / 2 {
+        if max_x > max_col_idx || max_y > max_row_idx {
             // bogus motion
             return (0, 0);
         }

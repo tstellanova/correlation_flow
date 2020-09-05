@@ -19,6 +19,8 @@ keywords = [
 
 [dependencies]
 num-traits = {version="0.2.12" , default-features=false }
+#generic-array = "0.14.4"
+
 
 [profile.release]
 debug = 1 # default is `false`; using `true` is also OK

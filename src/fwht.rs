@@ -18,7 +18,8 @@ LICENSE: BSD3 (see LICENSE file)
 //!
 
 /// Currently the number of allowed samples is statically fixed at NSAMPLES
-pub const NSAMPLES: usize = 64 * 64;
+const FRAME_DIM: usize = 64;
+pub const NSAMPLES: usize = FRAME_DIM * FRAME_DIM;
 
 /// Length of an edge of the SAD blocks
 const SAD_BLOCK_DIM: usize = 2;
@@ -74,7 +75,8 @@ impl HadamardCorrelator {
     /// then transform, then sign-reduce
     fn fill_transform_reduce(input: &[u8], output: &mut [i16]) {
         Self::fill_u8_samples_to_i16(&input, output);
-        Self::fwht_transform_i16(output);
+        // Self::fwht_transform_1d_i16(output);
+        Self::fwht_transform_2d_i16(output, FRAME_DIM);
         Self::sign_reduce(output);
     }
 
@@ -147,7 +149,7 @@ impl HadamardCorrelator {
         // scratch2 is now { -1.0, 0.0, 1.0 } for cross-spectral power
 
         // inverse of FWHT is itself
-        Self::fwht_transform_i16(&mut self.i16_scratch2);
+        Self::fwht_transform_1d_i16(&mut self.i16_scratch2);
 
         // find the magnitude of dx, dy
         let (max_x, max_y) =
@@ -166,7 +168,7 @@ impl HadamardCorrelator {
     }
 
     /// Apply Fast Walsh Hadamard Transform (FWHT) in-place to buffer
-    fn fwht_transform_i16(buf: &mut [i16]) {
+    fn fwht_transform_1d_i16(buf: &mut [i16]) {
         let mut h = 1;
         while h < buf.len() {
             let h_leap = h << 1;
@@ -186,7 +188,34 @@ impl HadamardCorrelator {
         }
     }
 
-    /// Reduce input values to just their sign: +1 or -1
+    fn fwht_transform_2d_i16(buf: &mut [i16], ncols: usize) {
+        let nrows = buf.len() / ncols;
+
+        //transform rows first
+        for row in 0..nrows {
+            let idx = row*ncols;
+            Self::fwht_transform_1d_i16(&mut buf[idx..idx+ncols]);
+        }
+
+        let mut col_buf = [0i16; FRAME_DIM]; //nrows
+        //  transform columns
+        // TODO use iterator instead?
+        for col in 0..ncols {
+            // fill column buffer
+            for row in 0..nrows {
+                col_buf[row] = buf[row*ncols + col];
+            }
+            Self::fwht_transform_1d_i16(&mut col_buf);
+            for row in 0..nrows {
+                //copy back
+                buf[row*ncols + col] = col_buf[row];
+            }
+        }
+
+    }
+
+
+        /// Reduce input values to just their sign: +1 or -1
     /// For our application we disallow zero
     fn sign_reduce(buf: &mut [i16]) {
         for i in 0..buf.len() {

@@ -40,7 +40,7 @@ pub struct HadamardCorrelator {
     /// The number of columns in the image.
     /// This and NSAMPLES defines the "shape" of the image matrix.
     cols: usize,
-    rows: usize,
+    _rows: usize,
     /// the center x (column) of a frame
     frame_center_x: usize,
     /// the center y (row) of a frame
@@ -61,7 +61,7 @@ impl HadamardCorrelator {
 
         Self {
             cols: columns,
-            rows,
+            _rows: rows,
             frame_center_x,
             frame_center_y,
             i16_scratch0: [0i16; NSAMPLES],
@@ -88,31 +88,35 @@ impl HadamardCorrelator {
 
     /// Fast filter to eliminate low-change frames
     fn center_block_change_check(
-        &self,
         new_frame: &[u8],
         old_frame: &[u8],
+        frame_center_x: usize,
+        frame_center_y: usize,
+        columns: usize,
         sad_threshold: u16,
     ) -> bool {
-        let mut subframe1 = [0u8; 16];
-        let mut subframe0 = [0u8; 16];
+        const CK_BLOCK_DIM: usize = 4;
+        const CK_BLOCK_LEN: usize = CK_BLOCK_DIM*CK_BLOCK_DIM;
+        let mut subframe1 = [0u8; CK_BLOCK_LEN];
+        let mut subframe0 = [0u8; CK_BLOCK_LEN];
         Self::fill_block_from_frame(
             &old_frame,
             &mut subframe0,
-            self.frame_center_x - 2,
-            self.frame_center_y - 2,
-            self.cols,
-            4,
+            frame_center_x - (CK_BLOCK_DIM/2),
+            frame_center_y - (CK_BLOCK_DIM/2),
+            columns,
+            CK_BLOCK_DIM,
         );
         Self::fill_block_from_frame(
             &new_frame,
             &mut subframe1,
-            self.frame_center_x - 2,
-            self.frame_center_y - 2,
-            self.cols,
-            4,
+            frame_center_x - (CK_BLOCK_DIM/2),
+            frame_center_y - (CK_BLOCK_DIM/2),
+            columns,
+            CK_BLOCK_DIM,
         );
         let quick_sad = Self::sum_abs_diffs(&subframe0, &subframe1);
-        if quick_sad < (sad_threshold * (subframe0.len() as u16)) {
+        if quick_sad < (sad_threshold * (CK_BLOCK_LEN as u16)) {
             return false;
         }
         true
@@ -128,9 +132,9 @@ impl HadamardCorrelator {
         new_frame: &[u8],
         old_frame: &[u8],
     ) -> (i16, i16) {
-        let max_col_idx = self.frame_center_x;
-        let max_row_idx = self.frame_center_y;
-        if !self.center_block_change_check(new_frame, old_frame, 2) {
+
+        if !Self::center_block_change_check(new_frame, old_frame,  self.frame_center_x,  self.frame_center_y, self.cols, 2) {
+            // println!("insufficient chagne");
             return (0, 0);
         }
 
@@ -152,7 +156,11 @@ impl HadamardCorrelator {
         // find the magnitude of dx, dy
         let (max_x, max_y) =
             Self::find_averaged_peak(&self.i16_scratch2, self.cols);
-        if max_x > max_col_idx || max_y > max_row_idx {
+
+        let x_limit = self.frame_center_x;
+        let y_limit =  self.frame_center_y;
+        if max_x > x_limit || max_y > y_limit {
+            //println!("fwht max_x  {} > {} or max_y {} > {}", max_x, x_limit, max_y, y_limit);
             // bogus motion
             return (0, 0);
         }
@@ -204,7 +212,8 @@ impl HadamardCorrelator {
         col: usize,
         row: usize,
         frame_cols: usize,
-    ) -> u16 {
+    ) -> u16
+    {
         let mut test_block = [0u8; SAD_BLOCK_LEN];
         Self::fill_block_from_frame(
             &old_frame,
@@ -234,7 +243,8 @@ impl HadamardCorrelator {
         frame_cols: usize,
         dx: usize,
         dy: usize,
-    ) -> (i16, i16) {
+    ) -> (i16, i16)
+    {
         const SAD_BLOCK_HALF_DIM: usize = SAD_BLOCK_DIM / 2;
         assert_eq!(
             old_frame.len(),
@@ -288,7 +298,7 @@ impl HadamardCorrelator {
             }
         }
 
-        if x_hi < max_col && y_lo < ctr_y_lo {
+        if x_hi <= max_col && y_lo < ctr_y_lo {
             let cur_sad = Self::calc_sad_at_offset(
                 &old_frame,
                 &search_block,
@@ -306,7 +316,7 @@ impl HadamardCorrelator {
             }
         }
 
-        if x_lo < ctr_x_lo && y_hi < max_row {
+        if x_lo < ctr_x_lo && y_hi <= max_row {
             let cur_sad = Self::calc_sad_at_offset(
                 &old_frame,
                 &search_block,
@@ -324,7 +334,7 @@ impl HadamardCorrelator {
             }
         }
 
-        if x_hi < max_col && y_hi < max_row {
+        if x_hi <= max_col && y_hi <= max_row {
             let cur_sad = Self::calc_sad_at_offset(
                 &old_frame,
                 &search_block,
@@ -355,7 +365,8 @@ impl HadamardCorrelator {
         frame_start_y: usize,
         frame_cols: usize,
         block_dim: usize,
-    ) {
+    )
+    {
         let frame_len = frame.len();
         //memcpy one row at a time
         for block_row in 0..block_dim {
@@ -397,7 +408,7 @@ impl HadamardCorrelator {
     /// - Returns (dx, dy) of the peak position in the image
     fn find_averaged_peak(input: &[i16], columns: usize) -> (usize, usize) {
         let peaks = Self::find_top_two_peaks(&input, columns);
-        //println!("peaks: {:?}", peaks);
+        // println!("peaks: {:?}", peaks);
 
         let mut avg_x = 0;
         let mut avg_y = 0;
@@ -421,6 +432,7 @@ impl HadamardCorrelator {
         for i in 1..sample_count {
             let val = input[i];
             if val > working[0].1 {
+                //println!("push up: {} -> {}", i, val);
                 if val > working[1].1 {
                     // swap max into min peak
                     working[0] = working[1];

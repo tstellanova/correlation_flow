@@ -17,8 +17,10 @@ LICENSE: BSD3 (see LICENSE file)
 //!
 //!
 
+const COL_DIM: usize = 64;
+const ROW_DIM: usize = 64;
 /// Currently the number of allowed samples is statically fixed at NSAMPLES
-pub const NSAMPLES: usize = 64 * 64;
+pub const NSAMPLES: usize = COL_DIM * ROW_DIM;
 
 /// Length of an edge of the SAD blocks
 const SAD_BLOCK_DIM: usize = 2;
@@ -35,7 +37,7 @@ type FwhtFrameBufI16 = [i16; NSAMPLES];
 /// Uses FWHT sign-only transformation to measure displacement vector between two images.
 /// Can be used to measure optical flow by comparing a series of images.
 ///
-/// Minimum static memory used is (3 * 2) = 6 * NSAMPLES bytes
+/// Minimum static memory used is (3 * 2) + (1 * 4) = 10 * NSAMPLES bytes
 pub struct HadamardCorrelator {
     /// The number of columns in the image.
     /// This and NSAMPLES defines the "shape" of the image matrix.
@@ -50,6 +52,8 @@ pub struct HadamardCorrelator {
     i16_scratch0: FwhtFrameBufI16,
     i16_scratch1: FwhtFrameBufI16,
     i16_scratch2: FwhtFrameBufI16,
+
+    fat_scratch0: [i32; NSAMPLES],
 }
 
 impl HadamardCorrelator {
@@ -67,22 +71,35 @@ impl HadamardCorrelator {
             i16_scratch0: [0i16; NSAMPLES],
             i16_scratch1: [0i16; NSAMPLES],
             i16_scratch2: [0i16; NSAMPLES],
+            fat_scratch0: [0i32; NSAMPLES],
         }
     }
 
     /// Fill working buffer from input samples,
     /// then transform, then sign-reduce
-    fn fill_transform_reduce(input: &[u8], output: &mut [i16]) {
-        Self::fill_u8_samples_to_i16(&input, output);
-        Self::fwht_transform_i16(output);
-        Self::sign_reduce(output);
+    fn fill_transform_reduce(input: &[u8], output: &mut [i16], scratch: &mut [i32]) {
+        Self::fill_u8_samples_to_i32(input, scratch);
+        Self::fwht_transform_2d_i32(scratch);
+        // Self::fwht_transform_i32(scratch);
+        // Self::fwht_transform_i16(output);
+        Self::sign_reduce(scratch, output);
     }
 
-    /// Copy u8 sample bytes to i16 working buffer
-    fn fill_u8_samples_to_i16(input: &[u8], output: &mut [i16]) {
+    // /// Copy u8 sample bytes to i16 working buffer
+    // fn fill_u8_samples_to_i16(input: &[u8], output: &mut [i16]) {
+    //     let n = input.len().min(output.len());
+    //     for i in 0..n {
+    //         // move 0..255 scale to -128..127
+    //         output[i] = (input[i] as i16) - 128;
+    //     }
+    // }
+
+    /// Copy u8 sample bytes to i32 working buffer
+    fn fill_u8_samples_to_i32(input: &[u8], output: &mut [i32]) {
         let n = input.len().min(output.len());
         for i in 0..n {
-            output[i] = input[i] as i16;
+            // move 0..255 scale to -128..127
+            output[i] = (input[i] as i32) - 128;
         }
     }
 
@@ -138,8 +155,8 @@ impl HadamardCorrelator {
             return (0, 0);
         }
 
-        Self::fill_transform_reduce(&old_frame, &mut self.i16_scratch0);
-        Self::fill_transform_reduce(&new_frame, &mut self.i16_scratch1);
+        Self::fill_transform_reduce(&old_frame, &mut self.i16_scratch0, &mut self.fat_scratch0);
+        Self::fill_transform_reduce(&new_frame, &mut self.i16_scratch1, &mut self.fat_scratch0);
         // scratch0 and scratch1 now contain sets of -1/+1 which are the sign-reduced
         // form of their FWHT-transformed values
 
@@ -150,8 +167,8 @@ impl HadamardCorrelator {
         );
         // scratch2 is now { -1.0, 0.0, 1.0 } for cross-spectral power
 
-        // inverse of FWHT is itself
-        Self::fwht_transform_i16(&mut self.i16_scratch2);
+        // inverse of FWHT
+        Self::fwht_inv_transform_i16(&mut self.i16_scratch2);
 
         // find the magnitude of dx, dy
         let (max_x, max_y) =
@@ -173,6 +190,27 @@ impl HadamardCorrelator {
         (dx, dy)
     }
 
+    /// 2D Walsh-Hadamard transform
+    fn fwht_transform_2d_i32(data: &mut [i32]) {
+        assert!(data.len() >= COL_DIM * ROW_DIM, "block size {}x{} only", COL_DIM, ROW_DIM);
+        let mut transpose_scratch = [0i32; COL_DIM];
+
+        // 1D transform for rows
+        for i in 0..ROW_DIM {
+            let start_idx = i * COL_DIM;
+            let row_data = &mut data[start_idx..start_idx + COL_DIM];
+            Self::fwht_transform_i32(row_data);
+        }
+
+        // 1D transform for columns
+        transpose::transpose_inplace(data, &mut transpose_scratch, COL_DIM, ROW_DIM);
+        for i in 0..ROW_DIM {
+            let start_idx = i * COL_DIM;
+            let row_data = &mut data[start_idx..start_idx + COL_DIM];
+            Self::fwht_transform_i32(row_data);
+        }
+    }
+
     /// Apply Fast Walsh Hadamard Transform (FWHT) in-place to buffer
     fn fwht_transform_i16(buf: &mut [i16]) {
         let mut h = 1;
@@ -183,11 +221,32 @@ impl HadamardCorrelator {
                     let j_leap = j + h;
                     let x = buf[j];
                     let y = buf[j_leap];
-                    //println!("j x,y: {} {},{}", j, x, y);
-                    // we use saturating arithmetic here because, for our application,
-                    // this is sufficient to search for peaks
-                    buf[j] = x.saturating_add(y);
-                    buf[j_leap] = x.saturating_sub(y);
+                    buf[j] = x.saturating_add(y);  //x + y;
+                    buf[j_leap] = x.saturating_sub(y); //x - y;
+                }
+            }
+            h = h_leap;
+        }
+    }
+
+    fn fwht_inv_transform_i16(buf: &mut [i16]) {
+        Self::fwht_transform_i16(buf);
+        for i in 0..buf.len() {
+            buf[i] = buf[i] / 64; //TODO check
+        }
+    }
+
+    fn fwht_transform_i32(buf: &mut [i32]) {
+        let mut h = 1;
+        while h < buf.len() {
+            let h_leap = h << 1;
+            for i in (0..buf.len()).step_by(h_leap) {
+                for j in i..i + h {
+                    let j_leap = j + h;
+                    let x = buf[j];
+                    let y = buf[j_leap];
+                    buf[j] = x + y;
+                    buf[j_leap] = x - y;
                 }
             }
             h = h_leap;
@@ -196,12 +255,10 @@ impl HadamardCorrelator {
 
     /// Reduce input values to just their sign: +1 or -1
     /// For our application we disallow zero
-    fn sign_reduce(buf: &mut [i16]) {
-        for i in 0..buf.len() {
-            buf[i] = match buf[i] {
-                n if n > 0 => 1,
-                _ => -1,
-            };
+    ///
+    fn sign_reduce(input: &[i32], output: &mut [i16]) {
+        for i in 0..input.len() {
+            output[i] = input[i].signum() as i16;
         }
     }
 
@@ -399,9 +456,10 @@ impl HadamardCorrelator {
     /// Multiply two arrays element-wise ("Hadamard product")
     fn hadamard_product_i16(f0: &[i16], f1: &[i16], result: &mut [i16]) {
         for i in 0..f0.len() {
-            result[i] = f0[i] * f1[i]
+            result[i] = f0[i] * f1[i];
         }
     }
+
 
     /// Find the average position of top two values in the given slice.
     /// - `columns` is the number of columns per row in the input data
@@ -544,5 +602,31 @@ mod tests {
         );
         assert_eq!(sdx, -1i16, "sign dx should be N1");
         assert_eq!(sdy, 1i16, "sign dy should be P1");
+    }
+
+    #[test]
+    fn transform_roundtrip() {
+        const LOCAL_1D_LEN: usize = 64;
+        let mut working = [0i16; LOCAL_1D_LEN];
+        let mut  original = [0i16; LOCAL_1D_LEN];
+        for i in 0..original.len() {
+            let raw_val = (i + (i % 2) - (i % 3) + (i % 4) + (i % 5) + (i % 6) - (i % 7) + (i % 8)
+                + (i % 16) + (i % 32) + (i % 64) + (i % 128)
+                + (i % 256) + (i % 512) + (i % 1024)
+                + (i % 2048) + (i % 4096) + (i % 8192) + (i % 16384)) % 256 ;
+            let reduced_val = ((raw_val as i32) - 128) as i16;
+            original[i] = reduced_val;
+        }
+
+        working.copy_from_slice(&original);
+
+        HadamardCorrelator::fwht_transform_i16(&mut working);
+        println!("fdct: {:?}",&working[..LOCAL_1D_LEN]);
+        HadamardCorrelator::fwht_inv_transform_i16(&mut working);
+        println!("idct: {:?}",&working[..LOCAL_1D_LEN]);
+        println!("orig: {:?}",&original[..LOCAL_1D_LEN]);
+
+        // let (equal, fidx) = crate::tests::slices_equal(&original, &working, 1);
+        // assert!(equal,"roundtrip fail at {}: {} <> {}", fidx, working[fidx], original[fidx]);
     }
 }

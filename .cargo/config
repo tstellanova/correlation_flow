@@ -1,12 +1,11 @@
 
 # choose this runner to use the Segger tools
-#[target.thumbv7em-none-eabihf]
-#runner = "arm-none-eabi-gdb -q -x segger.gdb"
+[target.thumbv7em-none-eabihf]
+runner = "arm-none-eabi-gdb -q -x segger.gdb"
 
 # choose this runner to use probe-run
-[target.thumbv7em-none-eabihf]
-#[target.'cfg(all(target_arch = "arm", target_os = "none"))']
-runner = "probe-run --chip STM32F407VGTx"
+#[target.thumbv7em-none-eabihf]
+#runner = "probe-run --chip STM32F407VGTx"
 
 rustflags = [
   "-C", "link-arg=-Tlink.x", # LDD

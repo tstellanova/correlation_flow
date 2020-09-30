@@ -1,6 +1,6 @@
 [package]
 name = "correlation_flow"
-version = "0.1.2"
+version = "0.1.4"
 authors = ["Todd Stellanova <tstellanova@users.noreply.github.com>"]
 edition = "2018"
 license = "BSD-3-Clause"
@@ -18,20 +18,19 @@ keywords = [
 ]
 
 [dependencies]
-num-traits = {version="0.2.12" , default-features=false }
-#generic-array = "0.14.4"
-
+microfft = "0.3.0"
+num-traits = {version="0.2.12", default-features=false, features=["libm"] }
+num-complex = {version="0.2.4", default-features=false }
 
 [profile.release]
 debug = 1 # default is `false`; using `true` is also OK
 
-#[target.'cfg(fubarn)'.dev-dependencies]
 [dev-dependencies]
 embedded-hal = "0.2.4"
 cortex-m = "0.6.3"
 cortex-m-rt = "0.6.12"
 panic-rtt-core = {version="0.2.1"}
-px4flow_bsp = {version="0.1.6", path="../px4flow_bsp"}
+px4flow_bsp = {version="0.2" }
 stm32f4xx-hal = {version="0.8.3",  features = ["stm32f407", "rt"] }
 
 

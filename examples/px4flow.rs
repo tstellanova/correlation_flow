@@ -11,7 +11,7 @@ use rt::entry;
 
 use panic_rtt_core::{self, rprintln, rtt_init_print};
 
-use correlation_flow::fwht;
+use correlation_flow::micro_rfft;
 
 static IMAGE0: &'static [u8] = include_bytes!("../testdata/64sq_253_46.gray");
 static IMAGE1: &'static [u8] = include_bytes!("../testdata/64sq_250_30.gray");
@@ -28,10 +28,10 @@ fn main() -> ! {
     rprintln!("buf0: {:?}", &IMAGE0[0..8]);
     rprintln!("buf1: {:?}", &IMAGE1[0..8]);
 
-    const COLS: usize = 64;
-    const ROWS: usize = 64;
+    // const COLS: usize = 64;
+    // const ROWS: usize = 64;
 
-    let mut correlator = fwht::HadamardCorrelator::new(COLS, ROWS);
+    let mut correlator = micro_rfft::MicroFftContext::new();
 
     const FRAME_COUNT: u32 = 10;
     let mut last_flow = (0i16, 0i16);

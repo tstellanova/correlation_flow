@@ -1,6 +1,12 @@
 # correlation_flow
 
 Optical flow calculation using image correlation for no_std rust.
+This library will compare small grayscale image blocks (limited to 64x64 pixels currently),
+and detect the phase correlation between them. This potentially enables applications such as:
+- Create image panoramas by seaming together overlapping images
+- Detect optical flow translation (for machine vision / robotics)
+- Image registration
+- Measure image similarity
 
 ## Embedded Examples
 The examples are designed to be used with J-Link / RTT.
@@ -24,7 +30,7 @@ This example is intended to run on the PX4FLOW hardware.
 It simply compares two image frames stored in the app binary. 
 
 ```shell script
-cargo run --example px4flow --release
+cargo run --release --example px4flow 
 ``` 
 
 ## Image Conversion
@@ -38,4 +44,4 @@ convert 64sq_253_46.png -depth 8 64sq_253_46.gray
 
 - [x] Detects discrete 2D image translation within a static 64x64 grid (maximum +/- 32 pixel movement)
 - [x] Example that runs on embedded hardware (PX4FLOW)
-- [ ] Simple test runs (currently requires commenting out dev-dependencies to run on std platform)
+- [ ] Support > 64x64 block sizes

@@ -2,7 +2,7 @@
 Copyright (c) 2020 Todd Stellanova
 LICENSE: BSD3 (see LICENSE file)
 */
-#![cfg_attr(not(test), no_std)]
+#![no_std]
 
 //! Calculates 2D image translation using image correlation
 //!
@@ -18,8 +18,6 @@ LICENSE: BSD3 (see LICENSE file)
 use num_complex::Complex32;
 pub mod micro_rfft;
 
-//TODO fix FWHT correlator
-// pub mod fwht;
 
 /// Convert 8-bit mono image data to normalized f32
 pub(crate) fn fill_u8_samples_to_f32(input: &[u8], output: &mut [f32]) {

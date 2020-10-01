@@ -45,6 +45,7 @@ impl MicroFftContext {
         self.calculate_flow_fft(new_frame, old_frame, COL_DIM, ROW_DIM)
     }
 
+    /// Calculated the normalized cross-power spectrum between the two image buffers:
     /// Output in self.cscratch0
     fn cross_power_spectrum_norm(&mut self, buf0: &[u8], buf1: &[u8]) {
         super::fill_u8_samples_to_f32(&buf0, &mut self.rscratch0);
@@ -65,7 +66,7 @@ impl MicroFftContext {
     /// - old_frame and new_frame image frames with pixels in row-major-order.
     /// - Returns (x, y) of translation
     ///
-    pub fn calculate_flow_fft(
+    fn calculate_flow_fft(
         &mut self,
         new_frame: &[u8],
         old_frame: &[u8],
@@ -139,9 +140,8 @@ impl MicroFftContext {
         let n = f0.len();
         for i in 0..n {
             let prod = f0[i] * f1[i];
-            //let prod_norm = (prod.re*prod*re + prod.im*prod.im).sqrt();
-            //let prod_norm = prod.re.hypot(prod.im);
-            let prod_norm = prod.norm_sqr().sqrt();
+            // let prod_norm = prod.norm_sqr().sqrt();
+            let prod_norm = prod.re.hypot(prod.im);
             result[i] = prod / prod_norm;
         }
     }
